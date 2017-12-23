@@ -55,10 +55,10 @@ def nyta_response_to_s3(year,month,sns_client,s3_resource):
 
 def s3_to_rds(year,month,sns_client,s3_resource):
     prefix = f'{year}/{str(month).zfill(2)}/'
+    bucket = s3_resource.Bucket(name=S3_BUCKET)
     records = []
-    for obj in s3_resource.objects.filter(Prefix=prefix):
-        bucket = s3_resource.Bucket(name=S3_BUCKET)
-        content_object = bucket.Object(S3_BUCKET, obj.key)
+    for obj in bucket.objects.filter(Prefix=prefix):
+        content_object = s3_resource.Object(S3_BUCKET, obj.key)
         file_content = content_object.get()['Body'].read().decode('UTF-8')
         json_content = json.loads(file_content)
         pp = json_content.get('print_page', None)
