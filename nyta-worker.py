@@ -5,18 +5,18 @@ from psycopg2.extras import execute_values
 import json
 import itertools
 
+config = json.load(open('worker_config.cfg','r'))
 
-
-API_KEY = 'redacted'
+API_KEY = config['API_KEY']
 API_URL = 'https://api.nytimes.com/svc/archive/v1/{year:}/{month:}.json'
 PAYLOAD = {'api-key':API_KEY}
 S3_BUCKET = 'bf-nyt-archive'
-SNS_NOTIFIER = 'redacted'
+SNS_NOTIFIER = config['SNS_NOTIFIER']
 
 nyt_creds = {'dbname':'nyt_articles',
              'port':5432,
              'user':'dbadmin',
-             'password':'redacted',
+             'password':config['nyt_creds_password'],
              'host':'nyt-articles.ckwrv3en1yz3.us-east-2.rds.amazonaws.com'}
 
 def initialize():
