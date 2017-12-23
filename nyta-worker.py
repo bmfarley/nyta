@@ -11,7 +11,7 @@ API_KEY = config['API_KEY']
 API_URL = 'https://api.nytimes.com/svc/archive/v1/{year:}/{month:}.json'
 PAYLOAD = {'api-key':API_KEY}
 S3_BUCKET = 'bf-nyt-archive'
-SNS_NOTIFIER = config['SNS_NOTIFIER']
+SLACK_HOOK = config['SLACK_HOOK']
 
 nyt_creds = {'dbname':'nyt_articles',
              'port':5432,
@@ -19,11 +19,18 @@ nyt_creds = {'dbname':'nyt_articles',
              'password':config['nyt_creds_password'],
              'host':'nyt-articles.ckwrv3en1yz3.us-east-2.rds.amazonaws.com'}
 
+class RequestNotifier:
+    def __init__(self, endpoint):
+        self.endpoint = endpoint
+
+    def notify(self,payload):
+        requests.post(self.endpoint,data=json.dumps(payload))
+
 def initialize():
     ohio_session = boto3.Session(region_name='us-east-2')
     s3 = ohio_session.resource('s3')
-    sns_client = boto3.client('sns', region_name='us-east-1')
-    return s3, sns_client
+    slack_notifier = RequestNotifier(SLACK_HOOK)
+    return s3, slack_notifier
 
 
 def response_elem_to_s3_body(elem):
@@ -43,47 +50,73 @@ def key_name_for_nyta(year,month,response_elem):
     return '{}/{:02d}/{}.txt'.format(year,month,response_elem['_id'])
 
 
-def nyta_response_to_s3(year,month,sns_client,s3_resource):
+def nyta_response_to_s3(year,month,s3_resource):
     response = make_nyta_response(year,month)
     doc_count = response['response']['meta']['hits']
     for ix,doc in enumerate(response['response']['docs']):
         key_name = key_name_for_nyta(year,month,doc)
         s3_body = response_elem_to_s3_body(doc)
         put_bytes_in_s3(s3_body,key_name,s3_resource)
-    sns_client.publish(PhoneNumber=SNS_NOTIFIER,
-                   Message='[nyt-archive-worker]: {}/{:02d} successfully published {} docs'.format(year,month,doc_count))
 
-def s3_to_rds(year,month,sns_client,s3_resource):
-    prefix = f'{year}/{str(month).zfill(2)}/'
-    bucket = s3_resource.Bucket(name=S3_BUCKET)
-    records = []
-    for obj in bucket.objects.filter(Prefix=prefix):
-        content_object = s3_resource.Object(S3_BUCKET, obj.key)
-        file_content = content_object.get()['Body'].read().decode('UTF-8')
-        json_content = json.loads(file_content)
-        pp = json_content.get('print_page', None)
-        lp = json_content.get('lead_paragraph', None)
-        sn = json_content.get('snippet', None)
-        hd = json_content['headline'].get('main', None)
-        pd = json_content.get('pub_date', None)
-        _id = json_content.get('_id', None)
-        records.append((_id, pp, sn, lp, hd, pd))
-
+def insert_records_in_rds(records):
     insert_meta = '''INSERT INTO article_meta (article_id,print_page,snippet,lead_paragraph,headline,publication_time)
 VALUES %s'''
     with pg2.connect(**nyt_creds) as nyt_conn:
         cursor = nyt_conn.cursor()
         execute_values(cursor,insert_meta,records)
 
-    sns_client.publish(PhoneNumber=SNS_NOTIFIER,
-                       Message='[nyt-archive-worker]: {}/{} uploaded to postgres'.format(year,str(month).zfill(2)))
+def nyta_json_to_record(json_content):
+    pp = json_content.get('print_page', None)
+    lp = json_content.get('lead_paragraph', None)
+    sn = json_content.get('snippet', None)
+    hd = json_content['headline'].get('main', None)
+    pd = json_content.get('pub_date', None)
+    _id = json_content.get('_id', None)
+    return (_id, pp, sn, lp, hd, pd)
 
+def response_to_s3_and_rds(year,month,s3_resource):
+    response = make_nyta_response(year,month)
+    failed_ids = {}
+    records = []
+    for ix, doc in enumerate(response['response']['docs']):
+        key_name = key_name_for_nyta(year,month,doc)
+        s3_body = response_elem_to_s3_body(doc)
+        put_bytes_in_s3(s3_body,key_name,s3_resource)
+        try:
+            record = nyta_json_to_record(doc)
+            records.append(record)
+        except Exception as e:
+            article_identifier = f'{year}-{str(month).zfill(2)}-{doc["_id"]}'
+            failed_ids[article_identifier] = e
+    assert records, f'Parsing of response failed completely for {year}/{str(month).zfill(2)}'
+    insert_records_in_rds(records)
+    return failed_ids or f'[nyta-worker]: {year}/{str(month).zfill(2)} receieved, loaded into S3 and inserted into postgres.'
+
+
+def s3_to_rds(year,month,s3_resource):
+    prefix = f'{year}/{str(month).zfill(2)}/'
+    bucket = s3_resource.Bucket(name=S3_BUCKET)
+    failed_ids = {}
+    records = []
+    for obj in bucket.objects.filter(Prefix=prefix):
+        content_object = s3_resource.Object(S3_BUCKET, obj.key)
+        file_content = content_object.get()['Body'].read().decode('UTF-8')
+        json_content = json.loads(file_content)
+        try:
+            record = nyta_json_to_record(json_content)
+            records.append(record)
+        except Exception as e:
+            article_identifier = f'{year}-{str(month).zfill(2)}-{json_content["_id"]}'
+            failed_ids[article_identifier] = e
+    assert records, f'Nothing in S3 for {year}/{str(month).zfill(2)}'
+    insert_records_in_rds(records)
+    return failed_ids or f'[nyta-worker]: {year}/{str(month).zfill(2)} inserted into postgres.'
 
 
 if __name__ == '__main__':
-    s3, sns_client = initialize()
+    s3, slack_notifier = initialize()
     print('1) Get articles from NYT\n2) Move articles to RDS')
-    choice_menu = {'1':nyta_response_to_s3,
+    choice_menu = {'1':response_to_s3_and_rds,
                    '2':s3_to_rds}
     choice = input('Do which?  ').rstrip()
     action = choice_menu[choice]
@@ -102,8 +135,18 @@ if __name__ == '__main__':
 
     for y,m in to_process:
         try:
-            action(y,m,sns_client,s3)
+            status = action(y,m,s3)
+            if type(status) == str:
+                slack_notifier.notify({'text':status})
+            else:
+                if len(status) <= 5:
+                    for _id,exception in status.items():
+                        slack_notifier.notify({'text':f'[nyta-worker] Article {_id}: {str(exception)}'})
+                else:
+                    ex = list(status.keys())[0]
+                    raise RuntimeError(f'Aborting. {len(status)} articles failed to parse; example:\n{ex} {status[ex]}')
+        except AssertionError as e:
+            slack_notifier.notify({'text':str(e)})
         except Exception as e:
-            sns_client.publish(PhoneNumber=SNS_NOTIFIER,
-                               Message='[nyt-archive-worker]: FATAL {}'.format(e))
+            slack_notifier.notify({'text':f'[nyta-worker] SOMETHING FUN {str(e)}'})
             raise
