@@ -5,6 +5,8 @@ from psycopg2.extras import execute_values
 import json
 import itertools
 
+
+
 API_KEY = 'redacted'
 API_URL = 'https://api.nytimes.com/svc/archive/v1/{year:}/{month:}.json'
 PAYLOAD = {'api-key':API_KEY}
@@ -56,7 +58,7 @@ def s3_to_rds(year,month,sns_client,s3_resource):
     records = []
     for obj in s3_resource.objects.filter(Prefix=prefix):
         bucket = s3_resource.Bucket(name=S3_BUCKET)
-        content_object = s3_resource.Object(S3_BUCKET, obj.key)
+        content_object = bucket.Object(S3_BUCKET, obj.key)
         file_content = content_object.get()['Body'].read().decode('UTF-8')
         json_content = json.loads(file_content)
         pp = json_content.get('print_page', None)
