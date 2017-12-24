@@ -4,6 +4,7 @@ import psycopg2 as pg2
 from psycopg2.extras import execute_values
 import json
 import itertools
+import time
 
 config = json.load(open('worker_config.cfg','r'))
 
@@ -81,6 +82,7 @@ def nyta_json_to_record(json_content):
 
 def response_to_s3_and_rds(year,month,s3_resource):
     response = make_nyta_response(year,month)
+    time.sleep(5)
     failed_ids = {}
     records = []
     key_name = key_name_for_nyta(year,month)
@@ -93,7 +95,7 @@ def response_to_s3_and_rds(year,month,s3_resource):
         except Exception as e:
             article_identifier = f'{year}-{str(month).zfill(2)}-{doc["_id"]}'
             failed_ids[article_identifier] = e
-    assert records, f'Parsing of response failed completely for {year}/{str(month).zfill(2)}'
+    assert records, f'[nyta-worker]: Parsing of response failed completely for {year}/{str(month).zfill(2)}'
     insert_records_in_rds(records)
     return failed_ids or f'[nyta-worker]: {year}/{str(month).zfill(2)} receieved, loaded into S3 and inserted into postgres.'
 
