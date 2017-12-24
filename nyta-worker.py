@@ -60,7 +60,8 @@ def nyta_response_to_s3(year,month,s3_resource):
 
 def insert_records_in_rds(records):
     insert_meta = '''INSERT INTO article_meta (article_id,print_page,snippet,lead_paragraph,headline,publication_time)
-VALUES %s'''
+VALUES %s
+ON CONFLICT DO NOTHING'''
     with pg2.connect(**nyt_creds) as nyt_conn:
         cursor = nyt_conn.cursor()
         execute_values(cursor,insert_meta,records)
