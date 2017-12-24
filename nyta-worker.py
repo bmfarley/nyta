@@ -43,6 +43,7 @@ def put_bytes_in_s3(bytes_,key_name,s3_resource,bucket=S3_BUCKET):
 
 def make_nyta_response(year,month):
     r = requests.get(API_URL.format(year=year,month=month),params=PAYLOAD)
+    r.raise_for_status()
     return r.json()
 
 
