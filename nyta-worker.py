@@ -46,8 +46,8 @@ def make_nyta_response(year,month):
     return r.json()
 
 
-def key_name_for_nyta(year,month,response_elem):
-    return '{}/{:02d}/{}.txt'.format(year,month,response_elem['_id'])
+def key_name_for_nyta(year,month):
+    return '{}/{:02d}/response.txt'.format(year,month)
 
 
 def nyta_response_to_s3(year,month,s3_resource):
@@ -70,19 +70,22 @@ def nyta_json_to_record(json_content):
     pp = json_content.get('print_page', None)
     lp = json_content.get('lead_paragraph', None)
     sn = json_content.get('snippet', None)
-    hd = json_content['headline'].get('main', None)
+    try:
+        hd = json_content['headline'].get('main', None)
+    except AttributeError:
+        hd = None
     pd = json_content.get('pub_date', None)
     _id = json_content.get('_id', None)
     return (_id, pp, sn, lp, hd, pd)
 
-def response_to_s3_and_rds(year,month,s3_resource): #TODO ONLY ONE FILE PER RESPONSE HOLY HELL PUT REQUESTS GET EXPENSIVE
+def response_to_s3_and_rds(year,month,s3_resource):
     response = make_nyta_response(year,month)
     failed_ids = {}
     records = []
-    for ix, doc in enumerate(response['response']['docs']):
-        key_name = key_name_for_nyta(year,month,doc)
-        s3_body = response_elem_to_s3_body(doc)
-        put_bytes_in_s3(s3_body,key_name,s3_resource)
+    key_name = key_name_for_nyta(year,month)
+    s3_body = response_elem_to_s3_body(response['response']['docs'])
+    put_bytes_in_s3(s3_body,key_name,s3_resource)
+    for doc in response['response']['docs']:
         try:
             record = nyta_json_to_record(doc)
             records.append(record)
@@ -109,7 +112,7 @@ def s3_to_rds(year,month,s3_resource):
         except Exception as e:
             article_identifier = f'{year}-{str(month).zfill(2)}-{json_content["_id"]}'
             failed_ids[article_identifier] = e
-    assert records, f'Nothing in S3 for {year}/{str(month).zfill(2)}'
+    assert records, f'[nyta-worker]: Nothing in S3 for {year}/{str(month).zfill(2)}'
     insert_records_in_rds(records)
     return failed_ids or f'[nyta-worker]: {year}/{str(month).zfill(2)} inserted into postgres.'
 
