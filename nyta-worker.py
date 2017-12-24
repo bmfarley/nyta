@@ -74,7 +74,7 @@ def nyta_json_to_record(json_content):
     _id = json_content.get('_id', None)
     return (_id, pp, sn, lp, hd, pd)
 
-def response_to_s3_and_rds(year,month,s3_resource):
+def response_to_s3_and_rds(year,month,s3_resource): #TODO ONLY ONE FILE PER RESPONSE HOLY HELL PUT REQUESTS GET EXPENSIVE
     response = make_nyta_response(year,month)
     failed_ids = {}
     records = []
@@ -139,7 +139,7 @@ if __name__ == '__main__':
             if type(status) == str:
                 slack_notifier.notify({'text':status})
             else:
-                if len(status) <= 5:
+                if len(status) <= 50:
                     for _id,exception in status.items():
                         slack_notifier.notify({'text':f'[nyta-worker] Article {_id}: {str(exception)}'})
                 else:
